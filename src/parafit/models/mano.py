@@ -73,7 +73,7 @@ def _mano_to_openpose(J_regressor: Tensor, verts: Tensor) -> Tensor:
 class ManoModel(Model):
     def __init__(self, mano_assets_root: str, betas: Optional[Tensor] = None,
                  num_joints: int = 21, center_idx: Optional[int] = 0, side: str = "right",
-                 flat_hand_mean: bool = True, joints: str = "regressed"):
+                 flat_hand_mean: bool = True, joints: str = "regressed", fix_left_shapedirs: bool = False):
         """``flat_hand_mean`` and ``center_idx`` are conventions of whatever
         produced the parameters, not preferences. Mismatching them is a silent
         ~100 mm error, so they are exposed rather than hardcoded.
@@ -111,6 +111,11 @@ class ManoModel(Model):
         the skeleton's joint centres (the 16 transform origins) + smplx fingertip vertices, the convention of HaMeR / WiLoR /
         HaWoR outputs and of their GT exports (they differ by up to ~8 mm at the knuckles for the same pose).
 
+        fix_left_shapedirs: the MANO_LEFT shape directions have the wrong sign in their x component (the left template is the
+        exact x-mirror of the right one, the left shapedirs are NOT): with nonzero betas the left hand is distorted (23 mm max at
+        beta0 = 2). True negates shapedirs[:, 0, :] for side="left" (HaMeR / HaWoR "fix_shapedirs"); off by default for
+        reproducibility of existing fits.
+
         All analytic Jacobians (rigid rows, ``tip_corrective`` exact rows, ``_vertex_jacobian``) are taken at the FULL
         pose ``theta + hands_mean`` (the rotations the layer applies) and are centred exactly like the forward.
         """
@@ -127,6 +132,9 @@ class ManoModel(Model):
             flat_hand_mean=flat_hand_mean,
             side=side,
         )
+        if fix_left_shapedirs and side == "left":
+            self.mano_layer.th_shapedirs[:, 0, :] *= -1.0          # MANO_LEFT sign bug (see docstring); every forward / Jacobian reads this buffer
+        self.fix_left_shapedirs = bool(fix_left_shapedirs and side == "left")
         self.J_regressor = self.mano_layer.th_J_regressor       # (16,778)
         self.num_joints = num_joints
         self.center_idx = center_idx
