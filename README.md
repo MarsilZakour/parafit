@@ -6,7 +6,7 @@
 6-DoF objects -- to multi-view evidence with a batched, differentiable
 Levenberg-Marquardt solver. Its **energies**, **models**, and **execution
 backend** are all pluggable. It is the reusable solver core behind
-[UA-Fit](https://marcilzakour.github.io/ua-fit/) (ECCV 2026 HANDS Workshop), released
+[UA-Fit](https://marsilzakour.github.io/ua-fit/) (ECCV 2026 HANDS Workshop), released
 standalone so new projects depend on one implementation instead of re-porting the same math.
 
 <p align="center">
@@ -33,22 +33,22 @@ Three ideas, cleanly separated:
 Core is torch-only; install from GitHub (PyPI release planned):
 
 ```bash
-pip install "git+https://github.com/marcilzakour/parafit.git"                # core solver + reprojection/anchor/pose-prior energies
-pip install "parafit[mano] @ git+https://github.com/marcilzakour/parafit.git"  # + MANO hand model
-pip install "parafit[all] @ git+https://github.com/marcilzakour/parafit.git"   # everything
+pip install "git+https://github.com/MarsilZakour/parafit.git"                # core solver + reprojection/anchor/pose-prior energies
+pip install "parafit[mano] @ git+https://github.com/MarsilZakour/parafit.git"  # + MANO hand model
+pip install "parafit[all] @ git+https://github.com/MarsilZakour/parafit.git"   # everything
 ```
 
 Or for development:
 
 ```bash
-git clone https://github.com/marcilzakour/parafit.git
+git clone https://github.com/MarsilZakour/parafit.git
 cd parafit && pip install -e ".[mano]"
 ```
 
 With **uv** (recommended; resolves the git-only manotorch dep):
 
 ```bash
-uv pip install "parafit[mano] @ git+https://github.com/marcilzakour/parafit.git"
+uv pip install "parafit[mano] @ git+https://github.com/MarsilZakour/parafit.git"
 ```
 
 Install torch for your CUDA build first. MANO weights are not shipped (license):

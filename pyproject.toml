@@ -29,8 +29,8 @@ all = ["smplx>=0.1.28", "mesh2sdf>=1.1", "trimesh>=4.0"]
 dev = ["pytest>=7", "ruff>=0.4"]
 
 [project.urls]
-Homepage = "https://github.com/marcilzakour/parafit"
-Repository = "https://github.com/marcilzakour/parafit"
+Homepage = "https://github.com/MarsilZakour/parafit"
+Repository = "https://github.com/MarsilZakour/parafit"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/parafit"]
