@@ -23,6 +23,7 @@ from torch import Tensor
 from parafit.core.lie import rotation_to_axis_angle, so3_exp
 from parafit.core.solver import LMSolver
 from parafit.energies.anchor3d import Anchor3DEnergy
+from parafit.energies.joint_limits import JointLimitEnergy
 from parafit.energies.pose_prior import PosePriorEnergy
 from parafit.mapping.mano_correspondence import ManoConventionHand, ManoCorrespondence, hand_scale_between
 
@@ -115,13 +116,17 @@ def initial_params(model: ManoConventionHand, targets: Tensor, articulation: Opt
 
 
 def fit_to_landmarks(model: ManoConventionHand, targets: Tensor, init: Optional[Tensor] = None, iterations: int = 40,
-                     articulation_prior: float = 1e-6) -> Tensor:
-    """Least-squares fit of the hand's MANO landmarks to ``targets`` (B,21,3) m; weak L2 pull of the articulation to 0."""
+                     articulation_prior: float = 1e-6, joint_limit_weight: float = 1e-3) -> Tensor:
+    """Least-squares fit of the hand's MANO landmarks to ``targets`` (B,21,3) m; weak L2 pull of the articulation to 0,
+    and the hand's joint limits (if it has ``articulation_limits``) as a quadratic penalty."""
     init = initial_params(model, targets) if init is None else init
     P = model.n_params
     precision = targets.new_zeros(P)
     precision[model.hand.articulation_slice] = articulation_prior
     energies = [Anchor3DEnergy(targets), PosePriorEnergy(torch.zeros_like(init), precision=precision)]
+    limits = getattr(model.hand, "articulation_limits", None)
+    if limits is not None and joint_limit_weight > 0:
+        energies.append(JointLimitEnergy(limits[:, 0], limits[:, 1], model.hand.articulation_slice, joint_limit_weight))
     with torch.no_grad():
         return LMSolver(max_iters=iterations, damping=1e-3).solve(model, init, energies).params
 
@@ -167,7 +172,8 @@ def _device(hand) -> torch.device:
 
 
 def calibrate_mano_correspondence(hand, mano, mano_assets_root: str, target: str, n_fit: int = 512, n_val: int = 256, rounds: int = 4,
-                                  fit_iterations: int = 40, articulation_prior: float = 1e-6, seed: int = 0,
+                                  fit_iterations: int = 40, articulation_prior: float = 1e-6,
+                                  joint_limit_weight: float = 1e-3, seed: int = 0,
                                   log=print) -> ManoCorrespondence:
     """Calibrate the MANO correspondence of ``hand`` (an ArticulatedHand) against ``mano`` (parafit ManoModel)."""
     t0 = time.time()
@@ -187,7 +193,8 @@ def calibrate_mano_correspondence(hand, mano, mano_assets_root: str, target: str
             rest = model.local_landmarks(y_fit.new_zeros(1, k)).expand(n_fit, -1, -1)
         model.hand_scale = hand_scale_between(rest, y_fit)
         params = fit_to_landmarks(model, y_fit, init=None if params is None else params,
-                                  iterations=fit_iterations, articulation_prior=articulation_prior)
+                                  iterations=fit_iterations, articulation_prior=articulation_prior,
+                                  joint_limit_weight=joint_limit_weight)
         with torch.no_grad():
             err = (model.forward(params).landmarks - y_fit).norm(dim=-1).mean().item() * 1000
         history.append(round(err, 3))
@@ -207,7 +214,8 @@ def calibrate_mano_correspondence(hand, mano, mano_assets_root: str, target: str
     with torch.no_grad():
         rest = model.local_landmarks(y_val.new_zeros(1, k)).expand(n_val, -1, -1)
     model.hand_scale = hand_scale_between(rest, y_val)
-    p_val = fit_to_landmarks(model, y_val, iterations=fit_iterations, articulation_prior=articulation_prior)
+    p_val = fit_to_landmarks(model, y_val, iterations=fit_iterations, articulation_prior=articulation_prior,
+                                  joint_limit_weight=joint_limit_weight)
     with torch.no_grad():
         val_joint = (model.forward(p_val).landmarks - y_val).norm(dim=-1).mean().item() * 1000
 
@@ -219,7 +227,8 @@ def calibrate_mano_correspondence(hand, mano, mano_assets_root: str, target: str
         y0, v0 = flat_state.landmarks.to(dev), flat_state.verts.to(dev)
         rest = model.local_landmarks(y0.new_zeros(1, k))
         model.hand_scale = hand_scale_between(rest, y0)
-        p0 = fit_to_landmarks(model, y0, iterations=fit_iterations, articulation_prior=articulation_prior)
+        p0 = fit_to_landmarks(model, y0, iterations=fit_iterations, articulation_prior=articulation_prior,
+                                  joint_limit_weight=joint_limit_weight)
         mesh0 = model.mesh(p0)[0]
         face, bary, dist = closest_points_on_triangles(v0[0], mesh0[hand.faces.to(dev)])
     corr = ManoCorrespondence(target, corr.bone_index, corr.bone_offset, face, bary)
@@ -231,7 +240,7 @@ def calibrate_mano_correspondence(hand, mano, mano_assets_root: str, target: str
 
     corr.calibration = {
         "seed": seed, "n_fit": n_fit, "n_val": n_val, "rounds": rounds, "fit_iterations": fit_iterations,
-        "articulation_prior": articulation_prior, "fit_residual_mm_per_round": history,
+        "articulation_prior": articulation_prior, "joint_limit_weight": joint_limit_weight, "fit_residual_mm_per_round": history,
         "heldout_joint_residual_mm": round(val_joint, 3), "heldout_vertex_residual_mm": round(val_vertex, 3),
         "flat_hand_vertex_to_surface_mm": round(dist.mean().item() * 1000, 3), "seconds": round(time.time() - t0, 1),
     }

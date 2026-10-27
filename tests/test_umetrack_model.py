@@ -274,3 +274,19 @@ def test_real_profile_if_available():
     st = m.forward(theta)
     span = (st.landmarks.max(1).values - st.landmarks.min(1).values).norm(dim=-1)
     assert (span > 0.05).all() and (span < 0.4).all(), span
+
+
+def test_handedness():
+    """side="right" must be a right hand: positive (anatomical) flexion moves the fingertips to the palmar
+    side, which for a right hand is (index MCP - pinky MCP) x (middle MCP - wrist). Uses the real generic
+    model if UMETRACK_GENERIC_JSON is set (the synthetic profile has no anatomical meaning)."""
+    path = os.environ.get("UMETRACK_GENERIC_JSON", "")
+    if not path or not os.path.exists(path):
+        pytest.skip("set UMETRACK_GENERIC_JSON to UmeTrack's dataset/generic_hand_model.json")
+    for side, sign in (("right", 1.0), ("left", -1.0)):
+        m = UmeTrackModel(load_umetrack_hand(path), side=side, dtype=DT)
+        rest = m.forward(torch.zeros(1, m.n_params, dtype=DT)).landmarks[0]
+        palmar_if_right = torch.cross(rest[5] - rest[17], rest[9] - rest[0], dim=-1)
+        theta = torch.zeros(1, m.n_params, dtype=DT); theta[0, 3 + 9] = 1.0; theta[0, 3 + 10] = 1.0   # middle MCP + PIP flexion
+        moved = m.forward(theta).landmarks[0][12] - rest[12]
+        assert sign * float((moved * palmar_if_right).sum()) > 0, side

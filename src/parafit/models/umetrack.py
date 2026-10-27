@@ -17,6 +17,11 @@ joints ``{0,1}``, ``chain[2]`` by ``{0,1,2}``, ``chain[3]`` (the fingertip-ish f
 point bound directly to the wrist frame (every "proximal"/knuckle landmark) by none of them, since a
 joint's own pivot does not move under that joint's own rotation.
 
+Handedness: UmeTrack's hand models (the generic one and per-subject profiles) are LEFT hands -- UmeTrack
+indexes hand 0 = left, hand 1 = right = mirrored model. ``side="left"`` uses the file as is, ``side="right"``
+mirrors it (checked anatomically: positive, within-limit flexion of the unmirrored model moves the fingertips
+to the palmar side of a left hand; see ``tests/test_umetrack_model.py::test_handedness``).
+
 Units: UmeTrack json files are millimetres; `load_umetrack_hand` converts to metres and bakes in the
 file's own ``hand_scale`` (the subject's overall hand size). ``UmeTrackModel.hand_scale`` is a SEPARATE,
 adjustable uniform scale (default 1.0) applied on top, around the wrist -- the loaded rest geometry is
@@ -152,17 +157,14 @@ def load_umetrack_hand(json_path: Union[str, Path]) -> UmeTrackHand:
 
 
 def _mirror_hand(h: UmeTrackHand) -> UmeTrackHand:
-    """Opposite-hand model: flip the y/z rotation axes and the x-coordinate of every rest position.
-
-    Exactly `umetrack_hand.mirror_hand_model` (thesis-hope); faces are intentionally left untouched
-    there too (mesh winding is not re-oriented for the mirrored hand).
-    """
+    """Opposite-hand model: flip the y/z rotation axes and the x-coordinate of every rest position, and
+    reverse the triangle winding so the mirrored mesh keeps outward normals."""
     axes = h.joint_rotation_axes.clone(); axes[:, 1:] *= -1
     rest = h.joint_rest_positions.clone(); rest[:, 0] *= -1
     lm = h.landmark_rest_positions.clone(); lm[:, 0] *= -1
     mesh = h.mesh_vertices.clone(); mesh[:, 0] *= -1
     return replace(h, joint_rotation_axes=axes, joint_rest_positions=rest,
-                   landmark_rest_positions=lm, mesh_vertices=mesh)
+                   landmark_rest_positions=lm, mesh_vertices=mesh, faces=h.faces.flip(-1))
 
 
 def _bone_names() -> list:
@@ -213,7 +215,7 @@ class UmeTrackModel(Model):
         self.hand_scale: Union[float, Tensor] = 1.0   # separate, adjustable uniform scale (see module docstring)
         self.device, self.dtype = device, dtype
 
-        h = hand if side == "right" else _mirror_hand(hand)
+        h = hand if side == "left" else _mirror_hand(hand)     # UmeTrack hand models are LEFT hands (hand 0 = left)
         to = lambda t: t.to(device=device, dtype=dtype)
         self.axes = to(h.joint_rotation_axes)              # (22,3)
         self.rest = to(h.joint_rest_positions)              # (22,3) m
@@ -335,6 +337,11 @@ class UmeTrackModel(Model):
     @property
     def articulation_slice(self) -> slice:
         return self.param_spec.slice("joint_angles")
+
+    @property
+    def articulation_limits(self) -> Tensor:
+        """(22,2) [lower, upper] joint-angle limits in rad (UmeTrack's own)."""
+        return self.joint_limits
 
     def _articulated_params(self, articulation: Tensor) -> Tensor:
         params = articulation.new_zeros(articulation.shape[0], self.n_params)

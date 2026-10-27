@@ -81,6 +81,15 @@ class MhrHandModel(Model):
             self._hand_bones = torch.tensor(keep, dtype=torch.long)
         return self._hand_bones
 
+    @property
+    def articulation_limits(self) -> Tensor:
+        """(27,2) [lower, upper] of the finger parameters from the rig's parameter limits (+-inf if unlimited)."""
+        cols = self.finger_cols
+        lo = getattr(self.mhr, "param_lo", None)
+        if lo is None:
+            return torch.tensor([[-float("inf"), float("inf")]]).repeat(cols.numel(), 1)
+        return torch.stack([self.mhr.param_lo[cols], self.mhr.param_hi[cols]], dim=1).float()
+
     def _articulated_theta(self, articulation: Tensor) -> Tensor:
         B = articulation.shape[0]
         params = torch.zeros(B, self.n_params, dtype=articulation.dtype, device=articulation.device)
