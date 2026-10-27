@@ -2,8 +2,8 @@
 
 **A pluggable analytical solver for parametric model fitting.**
 
-`parafit` fits parametric models -- hands (MANO, UmeTrack), bodies (SMPL-X), and
-6-DoF objects -- to multi-view evidence with a batched, differentiable
+`parafit` fits parametric models -- hands (MANO, MHR hand, UmeTrack), bodies (MHR),
+and rigid or articulated objects -- to multi-view evidence with a batched, differentiable
 Levenberg-Marquardt solver. Its **energies**, **models**, and **execution
 backend** are all pluggable. It is the reusable solver core behind
 [UA-Fit](https://marsilzakour.github.io/ua-fit/) (ECCV 2026 HANDS Workshop;
@@ -11,10 +11,21 @@ backend** are all pluggable. It is the reusable solver core behind
 standalone so new projects depend on one implementation instead of re-porting the same math.
 
 <p align="center">
-  <img src="docs/media/lm_fit.gif" alt="Batched LM solver fitting a MANO hand: mesh converging alongside the decreasing energy" width="640">
+  <img src="docs/media/parafit_models.gif" alt="One parafit LMSolver fitting MANO, MHR and UmeTrack hands to the same multi-view evidence, with the convergence of each" width="1000">
   <br>
-  <em>The LM solver fitting a MANO hand to multi-view evidence, with the energy trajectory live.</em>
+  <em>One LMSolver, three hand models: MANO, MHR and UmeTrack fitted to the same UA-Fit network evidence (DexYCB test
+  sample, 3 of 8 views) with the same energies; only the parafit Model changes.</em>
 </p>
+
+## What is in the box
+
+| | |
+|---|---|
+| **Solver** | `LMSolver`: batched adaptive Levenberg-Marquardt (per-sample accept/reject, identity or Marquardt damping, float64 normal-equation solve by default) |
+| **Models** | `ManoModel` (exact analytic Jacobian), `MhrModel` (Meta's Momentum Human Rig, pure torch, loads from a cache) and `MhrHandModel` (one MHR hand), `UmeTrackModel` (exact analytic Jacobian, per-segment rest shape), `TwoPartRevolute`, `RigidKeypointModel` |
+| **Energies** | `ReprojectionEnergy`, `Anchor3DEnergy`, `PosePriorEnergy`, `JointLimitEnergy`; `ContactSDFEnergy` (stub) |
+| **Mapping** | `parafit.mapping`: MANO's 21 joints on any articulated hand (MHR, UmeTrack), calibrated correspondence |
+
 
 ## Why
 
@@ -97,7 +108,7 @@ git clone https://github.com/facebookresearch/UmeTrack.git /tmp/UmeTrack
 from parafit.models.umetrack import load_umetrack_hand, UmeTrackModel
 
 hand = load_umetrack_hand("/tmp/UmeTrack/dataset/generic_hand_model.json")
-model = UmeTrackModel(hand, side="right")   # side="left" mirrors the native model
+model = UmeTrackModel(hand, side="right")   # UmeTrack hand models are left hands; side="right" mirrors them
 ```
 
 Per-subject profiles in the same json layout (e.g. a dataset's own
@@ -105,15 +116,17 @@ Per-subject profiles in the same json layout (e.g. a dataset's own
 load the same way -- `load_umetrack_hand` accepts both layouts. See
 `parafit/models/umetrack.py`'s module docstring for the parameter layout, units
 (metres internally; UmeTrack json files are millimetres), and the exact native-UmeTrack
--> OpenPose-21 landmark mapping.
+-> OpenPose-21 landmark mapping. `model.articulation_limits` gives UmeTrack's joint limits (use them with
+`JointLimitEnergy`), and `model.segment_scales` (5 fingers x [palm, proximal, middle, distal]) scales the rest
+shape segment by segment, e.g. to match a subject's or another model's bone lengths.
 
 ## MANO-convention landmarks on other hands (`parafit.mapping`)
 
 Hand networks trained on MANO predict MANO's 21 joints (16 mesh-regressed joints
 + 5 fingertip vertices, OpenPose order). To fit MHR or UmeTrack to such evidence,
 `ManoConventionHand` attaches every MANO joint to one bone of the target hand with
-a fixed offset (a `ManoCorrespondence`), applies a uniform hand scale (shape
-transfer, `hand_scale_between`), and exposes the result as a regular parafit
+a fixed offset (a `ManoCorrespondence`), applies the hand's shape (a uniform scale from
+`hand_scale_between`, or UmeTrack's per-segment scales), and exposes the result as a regular parafit
 `Model` with an exact Jacobian. The correspondence also maps every MANO vertex to
 a barycentric point on the target mesh, so a fitted MHR / UmeTrack hand can be
 scored against MANO ground truth vertex by vertex.
@@ -134,19 +147,18 @@ model = ManoConventionHand(hand, corr)          # landmarks = MANO joints on the
 Any hand that implements the small `ArticulatedHand` protocol (wrist-local bone
 frames, native landmarks, mesh) can be wrapped; `MhrHandModel` and `UmeTrackModel`
 do. Calibration fits the target to synthetic MANO hands (PCA pose prior, random
-betas), re-solves each joint's bone and offset in closed form, and repeats; it
-reports the held-out residual (MHR 1.6 mm, UmeTrack see `calibration`) as the
-representation gap between the two models.
+betas) within its joint limits, re-solves each joint's bone and offset in closed form,
+and repeats; it reports the held-out residual as the representation gap between the two
+models (MHR 2.1 mm, UmeTrack 3.2 mm mean joint distance). Ready-made correspondences ship with
+[UA-Fit](https://github.com/MarsilZakour/ua-fit-code) (`assets/correspondences/`).
 
 ## Status
 
-v0.1.0 -- core solver (tensordict-batchable) + reprojection / 3D-anchor /
-pose-prior energies, the `ManoModel` (analytic-Jacobian MANO hand), and the
-`UmeTrackModel` (analytic-Jacobian UmeTrack hand), the MHR body / `MhrHandModel`
-and the MANO correspondence (`parafit.mapping`) are implemented and tested.
-`ContactSDFEnergy` is an interface stub slated for the next release.
-Roadmap: multi-body scene (hand+object) -> CUDA/TensorRT backend. See
-`docs/parafit-library-design.md`.
+v0.1.0 -- the solver core (tensordict-batchable), the reprojection / 3D-anchor / pose-prior / joint-limit energies,
+`ManoModel`, `MhrModel` / `MhrHandModel`, `UmeTrackModel` and the MANO correspondence (`parafit.mapping`) are
+implemented and tested; `ContactSDFEnergy` is an interface stub. In use as the solver of
+[UA-Fit](https://github.com/MarsilZakour/ua-fit-code). Roadmap: multi-body scenes (hand + object), CUDA / TensorRT
+backend. Design notes: `docs/parafit-library-design.md`.
 
 ## License
 

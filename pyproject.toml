@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Marsil Zakour" }]
-keywords = ["levenberg-marquardt", "hand-pose", "MANO", "SMPL-X", "multi-view", "solver", "differentiable-optimization"]
+keywords = ["levenberg-marquardt", "hand-pose", "MANO", "MHR", "UmeTrack", "multi-view", "solver", "differentiable-optimization"]
 
 # Core stays light: torch + tensordict (the batchable State/GNBlock/Observations
 # containers). torch+CUDA is best installed by the user for their platform first,
