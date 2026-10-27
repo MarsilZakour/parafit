@@ -148,6 +148,9 @@ class ManoConventionHand(Model):
         rot, origin, scale = self.hand.local_bone_frames(articulation)
         b = self.correspondence.bone_index
         p = self.correspondence.bone_offset.to(origin)
+        if hasattr(self.hand, "deform_bone_points"):      # hands with a rest-shape model move attached points with their bone
+            p = self.hand.deform_bone_points(p, b, articulation.shape[0])
+            return origin[:, b] + scale[:, b, None] * torch.einsum("bjik,bjk->bji", rot[:, b], p)
         return origin[:, b] + scale[:, b, None] * torch.einsum("bjik,jk->bji", rot[:, b], p)
 
     def forward(self, params: Tensor) -> State:

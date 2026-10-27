@@ -213,6 +213,7 @@ class UmeTrackModel(Model):
         self.side = side
         self.with_mesh = with_mesh
         self.hand_scale: Union[float, Tensor] = 1.0   # separate, adjustable uniform scale (see module docstring)
+        self.segment_scales: Union[None, Tensor] = None  # (5,4) or (B,5,4) per-finger segment scales, see `rest_shape`
         self.device, self.dtype = device, dtype
 
         h = hand if side == "left" else _mirror_hand(hand)     # UmeTrack hand models are LEFT hands (hand 0 = left)
@@ -264,6 +265,53 @@ class UmeTrackModel(Model):
             raise ValueError(f"hand_scale has {s.numel()} elements, expected 1 or B={B}")
         return s.reshape(B, 1, 1)
 
+    # Finger segments: per finger [palm (wrist -> first pivot), proximal, middle, distal (-> fingertip)]. A segment
+    # scale stretches that segment's rest geometry about its start; the chain is re-assembled from the wrist out.
+    # Joint pivot k of a finger lies in segment _PIVOT_SEGMENT[k]; skinning bone chain[k] (k = 1..3) is segment k.
+    _PIVOT_SEGMENT = (0, 1, 1, 2)
+    _TIP_LANDMARKS = (4, 8, 12, 16, 20)            # OpenPose fingertips (rest positions in `op_rest`)
+
+    def _segment_scale_tensor(self, B: int, device, dtype: torch.dtype) -> Tensor:
+        """(B,5,4) segment scales including the uniform `hand_scale`."""
+        s = torch.ones(B, NUM_DIGITS, 4, dtype=dtype, device=device) if self.segment_scales is None \
+            else torch.as_tensor(self.segment_scales, dtype=dtype, device=device).expand(B, NUM_DIGITS, 4)
+        return s * self._scale(B, device, dtype).view(B, 1, 1)
+
+    def rest_shape(self, B: int, device, dtype: torch.dtype):
+        """Rest skeleton under the current shape: joint pivots (B,22,3) and, per skinning bone, its rest start (17,3),
+        new start (B,17,3) and scale (B,17)."""
+        s = self._segment_scale_tensor(B, device, dtype)
+        rest = self.rest.to(device=device, dtype=dtype)
+        tips = self.op_rest.to(device=device, dtype=dtype)[list(self._TIP_LANDMARKS)]          # (5,3)
+        f4 = torch.arange(NUM_DIGITS, device=device) * DOF_PER_FINGER
+        chain = torch.stack([torch.zeros_like(tips), rest[f4], rest[f4 + 2], rest[f4 + 3], tips], dim=1)   # (5,5,3)
+        segments = chain[:, 1:] - chain[:, :-1]                                                  # (5,4,3)
+        new_chain = torch.cat([chain.new_zeros(B, NUM_DIGITS, 1, 3),
+                               torch.cumsum(s[..., None] * segments, dim=2)], dim=2)            # (B,5,5,3)
+        palm = s[..., 0].mean(1)                                                                 # (B,)
+        pivots = rest.unsqueeze(0) * palm.view(B, 1, 1)                                          # inert slots 20/21
+        pivots = pivots.clone()
+        for k, g in enumerate(self._PIVOT_SEGMENT):
+            j = f4 + k
+            pivots[:, j] = new_chain[:, :, g] + s[:, :, g, None] * (rest[j] - chain[:, g])
+        start = torch.cat([chain.new_zeros(2, 3), chain[:, 1:4].reshape(15, 3)])                 # (17,3)
+        new_start = torch.cat([chain.new_zeros(B, 2, 3), new_chain[:, :, 1:4].reshape(B, 15, 3)], dim=1)
+        scale = torch.cat([palm.view(B, 1).expand(B, 2), s[:, :, 1:4].reshape(B, 15)], dim=1)
+        return pivots, start, new_start, scale
+
+    def deform_rest_points(self, points: Tensor, weights: Tensor, B: int, device, dtype: torch.dtype) -> Tensor:
+        """Rest-space points (N,3) skinned by ``weights`` (N,17) -> (B,N,3) under the current shape: each bone moves
+        its points with its segment, x' = sum_b w_b (new_start_b + scale_b (x - start_b))."""
+        _, start, new_start, scale = self.rest_shape(B, device, dtype)
+        x = points.to(device=device, dtype=dtype)
+        per_bone = new_start[:, None] + scale[:, None, :, None] * (x[None, :, None] - start[None, None])   # (B,N,17,3)
+        return torch.einsum("nb,Bnbd->Bnd", weights.to(device=device, dtype=dtype), per_bone)
+
+    def deform_bone_points(self, points: Tensor, bone_index: Tensor, B: int) -> Tensor:
+        """Points (N,3) rigidly attached to bones ``bone_index`` (N,) -> (B,N,3) under the current shape."""
+        weights = torch.nn.functional.one_hot(bone_index.long(), NUM_BONE_FRAMES)
+        return self.deform_rest_points(points, weights, B, points.device, points.dtype)
+
     def _fk(self, params: Tensor):
         """Shared forward kinematics.
 
@@ -279,8 +327,7 @@ class UmeTrackModel(Model):
         angles = params[:, 3:3 + NUM_FINGER_JOINTS]          # (B,20); joints 20/21 are inert (module docstring)
         root_trans = params[:, 3 + NUM_JOINTS: 3 + NUM_JOINTS + 3]
 
-        scale = self._scale(B, dev, dt)                                        # (B,1,1)
-        rest = self.rest.to(dtype=dt, device=dev).unsqueeze(0) * scale         # (B,22,3)
+        rest = self.rest_shape(B, dev, dt)[0]                                  # (B,22,3) pivots under the current shape
         axes = self.axes.to(dtype=dt, device=dev)                             # (22,3)
 
         I4 = _eye4(B, dt, dev)
@@ -310,16 +357,14 @@ class UmeTrackModel(Model):
     def forward(self, params: Tensor) -> State:
         B = params.shape[0]
         world_frames, local_frames, _, W, _ = self._fk(params)
-        scale = self._scale(B, params.device, params.dtype)
-
-        op_rest = self.op_rest.to(params).unsqueeze(0) * scale                # (B,21,3)
+        op_rest = self.deform_rest_points(self.op_rest, self.op_bone_weights, B, params.device, params.dtype)   # (B,21,3)
         local_lm = _lbs(local_frames, op_rest, self.op_bone_weights.to(params))
         wrist_R, wrist_t = W[:, :3, :3], W[:, :3, 3]
         landmarks = torch.einsum("bij,bnj->bni", wrist_R, local_lm) + wrist_t.unsqueeze(1)
 
         verts = None
         if self.with_mesh:
-            mesh_rest = self.mesh_vertices.to(params).unsqueeze(0) * scale    # (B,788,3)
+            mesh_rest = self.deform_rest_points(self.mesh_vertices, self.dense_bone_weights, B, params.device, params.dtype)
             local_v = _lbs(local_frames, mesh_rest, self.dense_bone_weights.to(params))
             verts = torch.einsum("bij,bnj->bni", wrist_R, local_v) + wrist_t.unsqueeze(1)
 
@@ -361,7 +406,7 @@ class UmeTrackModel(Model):
         """Skinned UmeTrack mesh (B,788,3), wrist-local."""
         params = self._articulated_params(articulation)
         local = self._fk(params)[1]
-        rest = self.mesh_vertices.to(params).unsqueeze(0) * self._scale(params.shape[0], params.device, params.dtype)
+        rest = self.deform_rest_points(self.mesh_vertices, self.dense_bone_weights, params.shape[0], params.device, params.dtype)
         return _lbs(local, rest, self.dense_bone_weights.to(params))
 
     def landmark_jacobian(self, params: Tensor, state: State) -> Tensor:
@@ -379,8 +424,7 @@ class UmeTrackModel(Model):
         P = self.n_params
         dev, dt = params.device, params.dtype
         _, local_frames, chain_local, W, rest = self._fk(params)
-        scale = self._scale(B, dev, dt)
-        op_rest = self.op_rest.to(params).unsqueeze(0) * scale
+        op_rest = self.deform_rest_points(self.op_rest, self.op_bone_weights, B, dev, dt)
         local_lm = _lbs(local_frames, op_rest, self.op_bone_weights.to(params))   # (B,21,3)
         wrist_R = W[:, :3, :3]
         axes = self.axes.to(params)
