@@ -74,14 +74,78 @@ Run the end-to-end test (multi-view rigid fit + finite-difference Jacobian check
 python tests/test_core_overfit.py
 ```
 
+## UmeTrack hand model
+
+`UmeTrackModel` (`parafit.models.umetrack`, extra `[umetrack]`, pure torch -- no extra
+dependencies) is a from-scratch FK+LBS port of
+[facebookresearch/UmeTrack](https://github.com/facebookresearch/UmeTrack)'s hand model
+(`lib/common/hand_skinning.py`) under the parafit `Model` interface: a 22-joint, 17-bone,
+788-vertex hand skeleton with an exact analytic landmark Jacobian.
+
+The hand-model json itself is **not vendored** (UmeTrack is released under
+**CC-BY-NC 4.0**, non-commercial, incompatible with bundling into an MIT package). Get one
+yourself and point `load_umetrack_hand` at it:
+
+```bash
+git clone https://github.com/facebookresearch/UmeTrack.git /tmp/UmeTrack
+# generic (non-subject-specific) hand model, used by the upstream repo's own demos:
+#   /tmp/UmeTrack/dataset/generic_hand_model.json
+```
+
+```python
+from parafit.models.umetrack import load_umetrack_hand, UmeTrackModel
+
+hand = load_umetrack_hand("/tmp/UmeTrack/dataset/generic_hand_model.json")
+model = UmeTrackModel(hand, side="right")   # side="left" mirrors the native model
+```
+
+Per-subject profiles in the same json layout (e.g. a dataset's own
+`profile_umetrack.json`, with the fields nested one level under a `"hand_model"` key)
+load the same way -- `load_umetrack_hand` accepts both layouts. See
+`parafit/models/umetrack.py`'s module docstring for the parameter layout, units
+(metres internally; UmeTrack json files are millimetres), and the exact native-UmeTrack
+-> OpenPose-21 landmark mapping.
+
+## MANO-convention landmarks on other hands (`parafit.mapping`)
+
+Hand networks trained on MANO predict MANO's 21 joints (16 mesh-regressed joints
++ 5 fingertip vertices, OpenPose order). To fit MHR or UmeTrack to such evidence,
+`ManoConventionHand` attaches every MANO joint to one bone of the target hand with
+a fixed offset (a `ManoCorrespondence`), applies a uniform hand scale (shape
+transfer, `hand_scale_between`), and exposes the result as a regular parafit
+`Model` with an exact Jacobian. The correspondence also maps every MANO vertex to
+a barycentric point on the target mesh, so a fitted MHR / UmeTrack hand can be
+scored against MANO ground truth vertex by vertex.
+
+```python
+from parafit.mapping import ManoConventionHand, ManoCorrespondence
+from parafit.mapping.calibration import calibrate_mano_correspondence
+from parafit.models.mano import ManoModel
+from parafit.models.mhr import MhrModel
+from parafit.models.mhr_hand import MhrHandModel
+
+hand = MhrHandModel(MhrModel.from_cache("mhr_lod1_cache.pt"), side="right", full_mesh=True)
+mano = ManoModel("assets/mano_v1_2", side="right")
+corr = calibrate_mano_correspondence(hand, mano, "assets/mano_v1_2", "mhr_right")   # once; corr.save(...)
+model = ManoConventionHand(hand, corr)          # landmarks = MANO joints on the MHR hand
+```
+
+Any hand that implements the small `ArticulatedHand` protocol (wrist-local bone
+frames, native landmarks, mesh) can be wrapped; `MhrHandModel` and `UmeTrackModel`
+do. Calibration fits the target to synthetic MANO hands (PCA pose prior, random
+betas), re-solves each joint's bone and offset in closed form, and repeats; it
+reports the held-out residual (MHR 1.6 mm, UmeTrack see `calibration`) as the
+representation gap between the two models.
+
 ## Status
 
 v0.1.0 -- core solver (tensordict-batchable) + reprojection / 3D-anchor /
-pose-prior energies and the `ManoModel` (analytic-Jacobian MANO hand) are
-implemented and tested. `UmeTrackModel` and `ContactSDFEnergy` are interface
-stubs slated for the next release.
-Roadmap: UmeTrack port -> multi-body scene (hand+object) -> CUDA/TensorRT
-backend. See `docs/parafit-library-design.md`.
+pose-prior energies, the `ManoModel` (analytic-Jacobian MANO hand), and the
+`UmeTrackModel` (analytic-Jacobian UmeTrack hand), the MHR body / `MhrHandModel`
+and the MANO correspondence (`parafit.mapping`) are implemented and tested.
+`ContactSDFEnergy` is an interface stub slated for the next release.
+Roadmap: multi-body scene (hand+object) -> CUDA/TensorRT backend. See
+`docs/parafit-library-design.md`.
 
 ## License
 

@@ -67,6 +67,28 @@ def so3_log(R: Tensor) -> Tensor:
     return coef.unsqueeze(-1) * vee
 
 
+def rotation_to_axis_angle(R: Tensor) -> Tensor:
+    """(..., 3, 3) rotation -> (..., 3) axis-angle via the unit quaternion; stable at any angle incl. pi
+    (``so3_log`` loses the axis near pi). Same construction as pytorch3d's ``matrix_to_axis_angle``."""
+    m = R.reshape(*R.shape[:-2], 9)
+    m00, m01, m02, m10, m11, m12, m20, m21, m22 = m.unbind(-1)
+    q_abs = torch.stack([1.0 + m00 + m11 + m22, 1.0 + m00 - m11 - m22,
+                         1.0 - m00 + m11 - m22, 1.0 - m00 - m11 + m22], dim=-1).clamp_min(0.0).sqrt()  # (...,4) 2|q|
+    candidates = torch.stack([
+        torch.stack([q_abs[..., 0] ** 2, m21 - m12, m02 - m20, m10 - m01], dim=-1),
+        torch.stack([m21 - m12, q_abs[..., 1] ** 2, m10 + m01, m02 + m20], dim=-1),
+        torch.stack([m02 - m20, m10 + m01, q_abs[..., 2] ** 2, m12 + m21], dim=-1),
+        torch.stack([m10 - m01, m20 + m02, m21 + m12, q_abs[..., 3] ** 2], dim=-1),
+    ], dim=-2) / (2.0 * q_abs[..., None].clamp_min(0.1))                       # (...,4,4) each row a quaternion (w,x,y,z)
+    best = q_abs.argmax(-1)
+    q = torch.gather(candidates, -2, best[..., None, None].expand(*best.shape, 1, 4)).squeeze(-2)
+    q = torch.where(q[..., :1] < 0, -q, q)                                    # w >= 0 -> angle in [0, pi]
+    norm_xyz = q[..., 1:].norm(dim=-1, keepdim=True)
+    angle = 2.0 * torch.atan2(norm_xyz, q[..., :1])
+    scale = torch.where(norm_xyz < 1e-6, 2.0 * torch.ones_like(angle), angle / norm_xyz.clamp_min(1e-12))
+    return q[..., 1:] * scale
+
+
 def point_rotation_jacobian(w: Tensor, p: Tensor) -> Tensor:
     """d(R(w) p) / dw with the right-Jacobian correction.
 

@@ -391,6 +391,11 @@ class MhrModel(Model):
         out = torch.zeros(B, self.n_verts, 3, dtype=rest.dtype, device=rest.device)
         return out.index_add(1, pv, y * pw.view(1, -1, 1))
 
+    def joint_transforms(self, params: Tensor):
+        """Global joint transforms at ``params`` (B,249) or (B,204): rotation (B,J,3,3), translation (B,J,3) cm,
+        uniform scale (B,J). A point p rigidly attached to joint k sits at ``t_k + s_k R_k p``."""
+        return self._fk(self._joint_params(params[:, :N_MODEL]))
+
     # ------------------------------------------------------------------ Model API
     def forward(self, params: Tensor, full_mesh: Optional[bool] = None) -> State:
         B = params.shape[0]

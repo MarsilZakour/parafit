@@ -56,6 +56,55 @@ class MhrHandModel(Model):
             self.vert_idx = None; self.faces = None
         self._dev, self._dt = dev, dt
 
+    # ------------------------------------------------------------------ articulated-hand interface (wrist-local, metres)
+    # Used by parafit.mapping.ManoConventionHand: everything below is the hand at zero root rotation / translation,
+    # with the wrist at the origin; the caller applies scale, root rotation and translation.
+    @property
+    def articulation_slice(self) -> slice:
+        return self.param_spec.slice("fingers")
+
+    @property
+    def bone_names(self) -> list[str]:
+        return [self.mhr.joint_names[i] for i in self.hand_bones.tolist()]
+
+    @property
+    def hand_bones(self) -> Tensor:
+        """MHR joint ids of this hand's subtree (wrist + all finger joints)."""
+        if not hasattr(self, "_hand_bones"):
+            parents = self.mhr.parents.tolist(); keep = []
+            for j in range(self.mhr.n_joints):
+                k = j
+                while k >= 0 and k != self.wrist_idx:
+                    k = parents[k]
+                if k == self.wrist_idx:
+                    keep.append(j)
+            self._hand_bones = torch.tensor(keep, dtype=torch.long)
+        return self._hand_bones
+
+    def _articulated_theta(self, articulation: Tensor) -> Tensor:
+        B = articulation.shape[0]
+        params = torch.zeros(B, self.n_params, dtype=articulation.dtype, device=articulation.device)
+        params[:, self.articulation_slice] = articulation
+        return self._full_theta(params)
+
+    def local_bone_frames(self, articulation: Tensor):
+        """articulation (B,27) -> rotation (B,N,3,3), origin (B,N,3) m, scale (B,N) of the hand bones (``hand_bones``)."""
+        R, t, s = self.mhr.joint_transforms(self._articulated_theta(articulation))
+        idx = self.hand_bones.to(articulation.device)
+        return R[:, idx], (t[:, idx] - self.t_w0.to(t)) / 100.0, s[:, idx]
+
+    def local_native_landmarks(self, articulation: Tensor) -> Tensor:
+        """The rig's own 21 OpenPose-ordered joints (B,21,3) m, wrist-local."""
+        _, t, _ = self.mhr.joint_transforms(self._articulated_theta(articulation))
+        return (t[:, self.joint_idx.to(articulation.device)] - self.t_w0.to(t)) / 100.0
+
+    def local_mesh(self, articulation: Tensor) -> Tensor:
+        """Hand mesh vertices (B,V_hand,3) m, wrist-local (requires ``full_mesh=True`` at construction)."""
+        if self.vert_idx is None:
+            raise ValueError("MhrHandModel(full_mesh=True) is required for the hand mesh")
+        verts = self.mhr.forward(self._articulated_theta(articulation), full_mesh=True).verts
+        return (verts[:, self.vert_idx.to(articulation.device)] - self.t_w0.to(verts)) / 100.0
+
     def _full_theta(self, params: Tensor) -> Tensor:
         B = params.shape[0]; th = torch.zeros(B, N_MODEL + N_IDENTITY, dtype=params.dtype, device=params.device)
         th[:, self.finger_cols.to(params.device)] = params[:, 3:3 + self.n_fingers]

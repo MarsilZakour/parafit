@@ -21,7 +21,8 @@ dependencies = ["torch>=2.1", "tensordict>=0.5", "numpy>=1.23"]
 # Parametric hand/body models.
 mano = ["smplx>=0.1.28"]          # manotorch is git-only -> see [tool.uv.sources]
 smplx = ["smplx>=0.1.28"]
-umetrack = []                      # torch-only + a profile-json loader (vendored)
+umetrack = []                      # torch-only; hand-model json from facebookresearch/UmeTrack (CC-BY-NC, not vendored)
+mhr = []                           # torch-only from a cache (MhrModel.from_cache); building the cache needs pymomentum + MHR assets
 # Energies with heavy geometry deps.
 contact = ["mesh2sdf>=1.1", "trimesh>=4.0"]
 # Meta.

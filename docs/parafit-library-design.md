@@ -90,7 +90,7 @@ extra yields an actionable `ImportError` rather than a cryptic traceback.
 |---|---|---|
 | `pip install parafit` | torch | solver + reprojection/anchor/pose-prior |
 | `parafit[mano]` | smplx (+ manotorch via git) | `ManoModel`, anatomy energy |
-| `parafit[umetrack]` | (vendored, light) | `UmeTrackModel` |
+| `parafit[umetrack]` | pure torch, no deps (hand-model json not vendored -- see README) | `UmeTrackModel` |
 | `parafit[contact]` | mesh2sdf, trimesh | `ContactSDFEnergy` |
 | `parafit[all]` / `[dev]` | everything / tests | — |
 
@@ -132,10 +132,11 @@ are live everywhere — one source of truth, no vendoring — before publishing.
 
 ## 6. Roadmap
 
-- **v0.1** — DONE: `ManoModel` (analytic `mano_kinematic_jac`, FD-validated) +
-  tensordict batchable containers. Remaining: `UmeTrackModel`, the anatomy-barrier
-  energy, the implicit backward, and full UA-Fit / SHOW3D parity through parafit
-  (same-harness parity is the acceptance gate).
+- **v0.1** — DONE: `ManoModel` (analytic `mano_kinematic_jac`, FD-validated),
+  `UmeTrackModel` (analytic revolute-chain Jacobian, FD-validated to <1e-10 rel-err)
+  + tensordict batchable containers. Remaining: the anatomy-barrier energy, the
+  implicit backward, and full UA-Fit / SHOW3D parity through parafit (same-harness
+  parity is the acceptance gate).
 - **v0.2** — a `Scene` of multiple `Model`s with cross-body coupling energies
   (hand+object contact), covering the real-time `solve_gn_multi` case; SMPL-X and
   6-DoF object models.
@@ -164,5 +165,12 @@ and fast" foundation. `tensordict` is a core dependency.
 `ManoModel` is now a real, validated model (forward + analytic Jacobian). Note:
 MANO uses boolean-mask ops that `vmap`/`jacrev` cannot batch, so such models must
 provide an analytic Jacobian (as `ManoModel` does) rather than rely on the
-autograd fallback. `UmeTrackModel` and `ContactSDFEnergy` remain grounded port
-stubs that name their thesis-hope source.
+autograd fallback.
+
+- `test_umetrack_model.py` -- `UmeTrackModel` forward/verts match an independent
+  numpy re-derivation of UmeTrack's FK+LBS to <1e-6m (both hands); the analytic
+  revolute-chain Jacobian matches finite differences at rel-err ~2e-11; a
+  3D-anchor overfit recovers a random pose to <1e-6mm; batch independence and
+  left/right mirror consistency (including a nontrivial root pose) hold exactly.
+
+`ContactSDFEnergy` remains a grounded port stub that names its thesis-hope source.
