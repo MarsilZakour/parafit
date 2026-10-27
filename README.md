@@ -6,7 +6,8 @@
 6-DoF objects -- to multi-view evidence with a batched, differentiable
 Levenberg-Marquardt solver. Its **energies**, **models**, and **execution
 backend** are all pluggable. It is the reusable solver core behind
-[UA-Fit](https://marsilzakour.github.io/ua-fit/) (ECCV 2026 HANDS Workshop), released
+[UA-Fit](https://marsilzakour.github.io/ua-fit/) (ECCV 2026 HANDS Workshop;
+[code](https://github.com/MarsilZakour/ua-fit-code), [weights](https://huggingface.co/Marsil123/ua-fit)), released
 standalone so new projects depend on one implementation instead of re-porting the same math.
 
 <p align="center">
