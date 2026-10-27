@@ -1,9 +1,8 @@
 """UmeTrackModel -- UmeTrack parametric hand (FK + LBS) under the parafit Model interface. [extra: umetrack]
 
 Ports facebookresearch/UmeTrack's ``lib/common/hand_skinning.py`` (CC-BY-NC 4.0; the hand-model json is
-not vendored here, see the README for how to obtain one) to the parafit ``Model`` interface, following
-the existing torch port at ``show3d_challenge/scripts/umetrack_torch.py`` / ``umetrack_hand.py``
-(thesis-hope repo), validated there to 0 mm against the numpy reference and the dataset GT.
+not vendored here, see the README for how to obtain one) to the parafit ``Model`` interface; forward
+kinematics and skinning match the reference implementation exactly (see ``tests/test_umetrack_model.py``).
 
 Skeleton: 22 joint slots, but only the first 20 (5 fingers x 4 DOF each, thumb/index/middle/ring/pinky
 in that row order) drive forward kinematics; joints 20-21 are UmeTrack's own unused reserved slots (the
